@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+#
+# claude-plan — Launch Claude Code in a git worktree with bypass permissions
+#
+# Usage:
+#   claude-plan <plan-file>   [worktree-name]   # Load plan from file
+#   claude-plan "prompt text" [worktree-name]   # Pass prompt directly
+#   claude-plan                                 # Interactive mode (auto-named worktree)
+#
+# Examples:
+#   claude-plan plan.md
+#   claude-plan plan.md auth-refactor
+#   claude-plan "refactor auth module and add unit tests"
+#   claude-plan "fix issue #42" bugfix-42
+#
+# Starts an interactive session — you can intervene, ask questions, or steer at any time.
+#
+# Requirements: git, claude (Claude Code CLI)
+
+set -euo pipefail
+
+# ── Colors ────────────────────────────────────────────
+RED=$'\033[0;31m'   GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m' CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'      DIM=$'\033[2m'
+NC=$'\033[0m'
+
+info()  { echo "${CYAN}▸${NC} $*"; }
+ok()    { echo "${GREEN}✔${NC} $*"; }
+warn()  { echo "${YELLOW}⚠${NC} $*"; }
+die()   { echo "${RED}✖${NC} $*" >&2; exit 1; }
+
+# ── Help ──────────────────────────────────────────────
+usage() {
+    cat <<EOF
+${BOLD}claude-plan${NC} — Launch Claude Code in a git worktree with bypass permissions
+
+${BOLD}USAGE${NC}
+    claude-plan [options] [<plan-file|prompt>] [<worktree-name>]
+
+${BOLD}ARGUMENTS${NC}
+    <plan-file|prompt>    Path to a plan file (.md, .txt, ...) or a prompt string
+                          If it's a file, its content becomes Claude's initial prompt
+                          Omit to enter interactive mode with no initial prompt
+    <worktree-name>       Worktree name (also used as branch name prefix)
+                          If omitted: derived from filename, or auto-generated timestamp
+
+${BOLD}OPTIONS${NC}
+    -h, --help            Show this help message
+    -l, --list            List all existing worktrees
+    -c, --cleanup         Remove worktrees with no uncommitted changes
+
+${BOLD}EXAMPLES${NC}
+    ${DIM}# Load plan file, worktree name derived from filename${NC}
+    claude-plan plan.md
+
+    ${DIM}# Load plan file with explicit worktree name${NC}
+    claude-plan plan.md auth-refactor
+
+    ${DIM}# Pass prompt directly${NC}
+    claude-plan "refactor auth module and add unit tests"
+
+    ${DIM}# Prompt with explicit worktree name${NC}
+    claude-plan "fix issue #42" bugfix-42
+
+    ${DIM}# Interactive mode (auto-generated worktree name)${NC}
+    claude-plan
+
+    ${DIM}# List existing worktrees${NC}
+    claude-plan --list
+
+    ${DIM}# Clean up worktrees with no changes${NC}
+    claude-plan --cleanup
+
+${BOLD}WORKFLOW${NC}
+    1. Creates a git worktree under .claude/worktrees/<n> (branched from current branch)
+    2. Launches Claude Code with --dangerously-skip-permissions (interactive mode)
+    3. You can type messages in the REPL at any time to intervene or steer
+    4. Press Ctrl+C to exit — changes remain on the worktree-<n> branch
+    5. Merge results back with git merge / cherry-pick
+
+${BOLD}REQUIREMENTS${NC}
+    git, claude (Claude Code CLI)
+EOF
+    exit 0
+}
+
+# ── List worktrees ───────────────────────────────────
+list_worktrees() {
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || die "Not inside a git repository"
+    local wt_dir="${repo_root}/.claude/worktrees"
+
+    if [[ ! -d "$wt_dir" ]]; then
+        info "No worktrees found"
+        exit 0
+    fi
+
+    echo "${BOLD}Worktrees in $(basename "$repo_root")${NC}"
+    echo ""
+
+    local count=0
+    for d in "$wt_dir"/*/; do
+        [[ -d "$d" ]] || continue
+        local name=$(basename "$d")
+        local branch="worktree-${name}"
+        local commits=$(git -C "$d" log --oneline "$(git -C "$d" merge-base HEAD "$branch" 2>/dev/null || echo HEAD)..HEAD" 2>/dev/null | wc -l || echo "?")
+        local status=$(git -C "$d" status --porcelain 2>/dev/null | wc -l || echo "?")
+        echo "  ${CYAN}${name}${NC}"
+        echo "    ${DIM}path${NC}     ${d}"
+        echo "    ${DIM}branch${NC}   ${branch}"
+        echo "    ${DIM}dirty${NC}    ${status} file(s)  ${DIM}commits${NC}  ${commits}"
+        echo ""
+        count=$((count + 1))
+    done
+
+    [[ $count -eq 0 ]] && info "No worktrees found"
+    exit 0
+}
+
+# ── Cleanup worktrees ────────────────────────────────
+cleanup_worktrees() {
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || die "Not inside a git repository"
+    local wt_dir="${repo_root}/.claude/worktrees"
+
+    if [[ ! -d "$wt_dir" ]]; then
+        info "No worktrees to clean up"
+        exit 0
+    fi
+
+    local removed=0
+    for d in "$wt_dir"/*/; do
+        [[ -d "$d" ]] || continue
+        local name=$(basename "$d")
+        local dirty=$(git -C "$d" status --porcelain 2>/dev/null | wc -l)
+        local branch="worktree-${name}"
+
+        if [[ "$dirty" -eq 0 ]]; then
+            git -C "$repo_root" worktree remove "$d" --force 2>/dev/null && \
+                git -C "$repo_root" branch -D "$branch" 2>/dev/null
+            ok "Removed: ${name}"
+            removed=$((removed + 1))
+        else
+            warn "Skipped ${name} (${dirty} uncommitted change(s))"
+        fi
+    done
+
+    git -C "$repo_root" worktree prune 2>/dev/null
+    [[ $removed -eq 0 ]] && info "Nothing to clean up (all worktrees have uncommitted changes)"
+    exit 0
+}
+
+# ── Handle options ───────────────────────────────────
+case "${1:-}" in
+    -h|--help)    usage ;;
+    -l|--list)    list_worktrees ;;
+    -c|--cleanup) cleanup_worktrees ;;
+esac
+
+# ── Prerequisites ────────────────────────────────────
+command -v git    &>/dev/null || die "git not found"
+command -v claude &>/dev/null || die "claude CLI not found — npm install -g @anthropic-ai/claude-code"
+git rev-parse --show-toplevel &>/dev/null || die "Not inside a git repository"
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# ── Parse arguments ──────────────────────────────────
+PLAN_INPUT="${1:-}"
+WORKTREE_NAME="${2:-}"
+PROMPT=""
+
+if [[ -n "$PLAN_INPUT" ]]; then
+    if [[ -f "$PLAN_INPUT" ]]; then
+        PLAN_FILE="$(realpath "$PLAN_INPUT")"
+        PROMPT=$(cat "$PLAN_FILE")
+        info "Loaded plan: ${BOLD}$(basename "$PLAN_INPUT")${NC} ($(wc -l < "$PLAN_FILE") lines)"
+
+        # Derive worktree name from filename
+        [[ -z "$WORKTREE_NAME" ]] && \
+            WORKTREE_NAME=$(basename "$PLAN_INPUT" | sed 's/\.[^.]*$//' | tr ' _A-Z' '--a-z')
+    else
+        PROMPT="$PLAN_INPUT"
+    fi
+fi
+
+# Generate default name if not set
+[[ -z "$WORKTREE_NAME" ]] && WORKTREE_NAME="plan-$(date +%m%d-%H%M%S)"
+
+# Sanitize name (keep only safe characters)
+WORKTREE_NAME=$(echo "$WORKTREE_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g; s/--*/-/g; s/^-//; s/-$//')
+
+# ── Ensure .gitignore includes worktree directory ────
+GITIGNORE="${REPO_ROOT}/.gitignore"
+if ! grep -qsxF '.claude/worktrees/' "$GITIGNORE" 2>/dev/null; then
+    echo '.claude/worktrees/' >> "$GITIGNORE"
+    ok "Added .claude/worktrees/ to .gitignore"
+fi
+
+# ── Create worktree ──────────────────────────────────
+WORKTREE_DIR="${REPO_ROOT}/.claude/worktrees/${WORKTREE_NAME}"
+BRANCH_NAME="worktree-${WORKTREE_NAME}"
+
+if [[ -d "$WORKTREE_DIR" ]]; then
+    warn "Worktree already exists, reusing: ${DIM}${WORKTREE_DIR}${NC}"
+else
+    BASE_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    mkdir -p "$(dirname "$WORKTREE_DIR")"
+
+    if ! git -C "$REPO_ROOT" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_BRANCH" 2>/dev/null; then
+        # Branch already exists — check it out directly
+        git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" "$BRANCH_NAME" 2>/dev/null \
+            || die "Failed to create worktree (branch ${BRANCH_NAME} conflict?)"
+    fi
+
+    ok "Worktree: ${BOLD}${WORKTREE_DIR}${NC}"
+    ok "Branch:   ${BOLD}${BRANCH_NAME}${NC} (base: ${BASE_BRANCH})"
+fi
+
+# ── Summary ──────────────────────────────────────────
+echo ""
+echo "${BOLD}┌─────────────────────────────────────────────┐${NC}"
+echo "${BOLD}│  Claude Code · Plan Runner · Interactive    │${NC}"
+echo "${BOLD}└─────────────────────────────────────────────┘${NC}"
+echo "  ${DIM}Repo${NC}       $(basename "$REPO_ROOT")"
+echo "  ${DIM}Worktree${NC}   ${CYAN}${WORKTREE_NAME}${NC}"
+echo "  ${DIM}Branch${NC}     ${GREEN}${BRANCH_NAME}${NC}"
+echo "  ${DIM}Mode${NC}       ${YELLOW}bypass permissions${NC} (interactive)"
+if [[ -n "$PROMPT" ]]; then
+    PREVIEW="${PROMPT:0:72}"
+    [[ ${#PROMPT} -gt 72 ]] && PREVIEW="${PREVIEW}…"
+    echo "  ${DIM}Prompt${NC}     ${PREVIEW}"
+fi
+echo ""
+echo "${DIM}  Tip: You can type messages in Claude Code at any time to intervene${NC}"
+echo "${DIM}  Press Ctrl+C to exit — changes are preserved on the worktree branch${NC}"
+echo ""
+
+# ── Launch Claude Code ───────────────────────────────
+cd "$WORKTREE_DIR"
+
+if [[ -n "$PROMPT" ]]; then
+    # Interactive mode with initial prompt
+    # claude "prompt" → starts REPL with first message pre-filled
+    exec claude --dangerously-skip-permissions "$PROMPT"
+else
+    # Pure interactive mode
+    exec claude --dangerously-skip-permissions
+fi
