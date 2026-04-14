@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# claude-plan — Launch Claude Code in a git worktree with bypass permissions
+# claude-exec-plan — Launch Claude Code in a git worktree with bypass permissions
 #
 # Usage:
-#   claude-plan <plan-file>   [worktree-name]   # Load plan from file
-#   claude-plan "prompt text" [worktree-name]   # Pass prompt directly
-#   claude-plan                                 # Interactive mode (auto-named worktree)
+#   claude-exec-plan <plan-file>   [worktree-name]   # Load plan from file
+#   claude-exec-plan "prompt text" [worktree-name]   # Pass prompt directly
+#   claude-exec-plan                                 # Interactive mode (auto-named worktree)
 #
 # Examples:
-#   claude-plan plan.md
-#   claude-plan plan.md auth-refactor
-#   claude-plan "refactor auth module and add unit tests"
-#   claude-plan "fix issue #42" bugfix-42
+#   claude-exec-plan plan.md
+#   claude-exec-plan plan.md auth-refactor
+#   claude-exec-plan "refactor auth module and add unit tests"
+#   claude-exec-plan "fix issue #42" bugfix-42
 #
 # Starts an interactive session — you can intervene, ask questions, or steer at any time.
 #
@@ -33,10 +33,10 @@ die()   { echo "${RED}✖${NC} $*" >&2; exit 1; }
 # ── Help ──────────────────────────────────────────────
 usage() {
     cat <<EOF
-${BOLD}claude-plan${NC} — Launch Claude Code in a git worktree with bypass permissions
+${BOLD}claude-exec-plan${NC} — Launch Claude Code in a git worktree with bypass permissions
 
 ${BOLD}USAGE${NC}
-    claude-plan [options] [<plan-file|prompt>] [<worktree-name>]
+    claude-exec-plan [options] [<plan-file|prompt>] [<worktree-name>]
 
 ${BOLD}ARGUMENTS${NC}
     <plan-file|prompt>    Path to a plan file (.md, .txt, ...) or a prompt string
@@ -52,25 +52,25 @@ ${BOLD}OPTIONS${NC}
 
 ${BOLD}EXAMPLES${NC}
     ${DIM}# Load plan file, worktree name derived from filename${NC}
-    claude-plan plan.md
+    claude-exec-plan plan.md
 
     ${DIM}# Load plan file with explicit worktree name${NC}
-    claude-plan plan.md auth-refactor
+    claude-exec-plan plan.md auth-refactor
 
     ${DIM}# Pass prompt directly${NC}
-    claude-plan "refactor auth module and add unit tests"
+    claude-exec-plan "refactor auth module and add unit tests"
 
     ${DIM}# Prompt with explicit worktree name${NC}
-    claude-plan "fix issue #42" bugfix-42
+    claude-exec-plan "fix issue #42" bugfix-42
 
     ${DIM}# Interactive mode (auto-generated worktree name)${NC}
-    claude-plan
+    claude-exec-plan
 
     ${DIM}# List existing worktrees${NC}
-    claude-plan --list
+    claude-exec-plan --list
 
     ${DIM}# Clean up worktrees with no changes${NC}
-    claude-plan --cleanup
+    claude-exec-plan --cleanup
 
 ${BOLD}WORKFLOW${NC}
     1. Creates a git worktree under .claude/worktrees/<n> (branched from current branch)
